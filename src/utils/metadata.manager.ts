@@ -234,8 +234,15 @@ export class MetadataManager {
     staticOptions?: DeclarationOptions['staticOptions'],
   ): string {
     if (matchingProperties[0].kind === SyntaxKind.ShorthandPropertyAssignment) {
-      // the metadata is a shorthand property, there is no array to insert into
-      return this.content;
+      const property = matchingProperties[0] as ShorthandPropertyAssignment;
+      const name = property.name.getText(source);
+      const start = property.getStart(source);
+      const end = property.getEnd();
+      return (
+        this.content.slice(0, start) +
+        `${name}: [...${name}, ${symbol}]` +
+        this.content.slice(end)
+      );
     }
     const assignment = matchingProperties[0] as PropertyAssignment;
     let node: Node | NodeArray<Expression>;
