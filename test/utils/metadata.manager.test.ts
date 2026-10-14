@@ -344,29 +344,39 @@ describe('Metadata Manager', () => {
       'export class FooModule {}\n'
     );
   });
-  it('should not duplicate a shorthand metadata', () => {
+  it('should register a provider with shorthand metadata', () => {
     const metadata = 'providers';
     const symbol = 'FooService';
     const content =
       'import { Module } from \'@nestjs/common\';\n' +
       '\n' +
+      'const providers = [ExistingService];\n' +
       '@Module({ providers })\n' +
       'export class FooModule {}\n';
     const manager = new MetadataManager(content);
-    expect(manager.insert(metadata, symbol)).toEqual(content);
+    expect(manager.insert(metadata, symbol)).toEqual(
+      content.replace(
+        '@Module({ providers })',
+        '@Module({ providers: [...providers, FooService] })',
+      ),
+    );
   });
-  it('should manage multi line with a shorthand metadata', () => {
+  it('should preserve existing providers with multiline shorthand metadata', () => {
     const symbol = 'FooService';
     const content =
       'import { Module } from \'@nestjs/common\';\n' +
       '\n' +
+      'const providers = [ExistingService];\n' +
       '@Module({\n' +
       '  imports: [],\n' +
       '  providers,\n' +
       '})\n' +
       'export class FooModule {}\n';
     expect(new MetadataManager(content).insert('providers', symbol)).toEqual(
-      content
+      content.replace(
+        '  providers,',
+        '  providers: [...providers, FooService],',
+      ),
     );
     expect(new MetadataManager(content).insert('imports', 'BarModule')).toEqual(
       'import { Module } from \'@nestjs/common\';\n' +
@@ -378,6 +388,21 @@ describe('Metadata Manager', () => {
       'export class FooModule {}\n'
     );
   });
+  it('should not duplicate a provider already inserted into shorthand metadata', () => {
+    const content =
+      'const providers = [ExistingService];\n' +
+      '@Module({ providers })\n' +
+      'export class AppModule {}\n';
+    const once = new MetadataManager(content).insert(
+      'providers',
+      'UsersService',
+    );
+    expect(once).toContain('providers: [...providers, UsersService]');
+    expect(new MetadataManager(once!).insert('providers', 'UsersService')).toBe(
+      once,
+    );
+  });
+
   it('should return undefined if there is no metadata to update', () => {
     const metadata = 'imports';
     const symbol = 'FooModule';

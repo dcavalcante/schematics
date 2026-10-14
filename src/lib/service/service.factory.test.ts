@@ -192,6 +192,34 @@ describe('Service Factory', () => {
         'export class AppModule {}\n',
     );
   });
+  it('should register a service when module providers use shorthand syntax', async () => {
+    const app: ApplicationOptions = {
+      name: '',
+      type: 'cjs',
+    };
+    let tree: UnitTestTree = await runner.runSchematic('application', app);
+    const modulePath = normalize('/src/app.module.ts');
+    const source = tree.readContent(modulePath);
+    tree.overwrite(
+      modulePath,
+      source
+        .replace('@Module({', 'const providers = [AppService];\n\n@Module({')
+        .replace('  providers: [AppService],', '  providers,'),
+    );
+
+    tree = await runner.runSchematic(
+      'service',
+      { name: 'foo', flat: true },
+      tree,
+    );
+
+    const generated = tree.readContent(modulePath);
+    expect(generated).toContain("import { FooService } from './foo.service';");
+    expect(generated).toContain(
+      '  providers: [...providers, FooService],',
+    );
+  });
+
   it('should manage declaration in foo module', async () => {
     const app: ApplicationOptions = {
       name: '',
