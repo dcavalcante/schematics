@@ -7,17 +7,17 @@ import {
   isImportEqualsDeclaration,
   isStringLiteral,
   isClassDeclaration,
-  isClassStaticBlockDeclaration,
+  isClassExpression,
   isEnumDeclaration,
   isFunctionDeclaration,
-  isFunctionLike,
+  isFunctionExpression,
   isInterfaceDeclaration,
   isModuleDeclaration,
+  isParameter,
   isTypeAliasDeclaration,
-  isVariableDeclarationList,
-  isVariableStatement,
+  isTypeParameterDeclaration,
+  isVariableDeclaration,
   Node,
-  NodeFlags,
   ScriptTarget,
   SourceFile,
   SyntaxKind,
@@ -59,17 +59,19 @@ export class ModuleImportDeclarator {
     );
     const imports = source.statements.filter(isImportDeclaration);
     const targetPath = this.computeRelativePath(options);
+    const bindings = this.getModuleBindings(source);
     const requestedImports = this.findRequestedImports(
       imports,
       symbol,
       targetPath,
+    ).filter(({ localName, binding }) =>
+      bindings.get(localName)?.every((declaration) => declaration === binding),
     );
     if (requestedImports.length > 0) {
       return { content, symbol: requestedImports[0].localName };
     }
 
-    const bindings = this.getModuleBindings(source);
-    const localSymbol = this.uniqueSymbol(symbol, bindings);
+    const localSymbol = this.uniqueSymbol(symbol, new Set(bindings.keys()));
     const toInsert = this.buildLineToInsert(options, localSymbol);
     const contentLines = content.split('\n');
     const finalImportIndex = this.findImportsEndpoint(contentLines);
@@ -81,8 +83,8 @@ export class ModuleImportDeclarator {
     imports: ImportDeclaration[],
     symbol: string,
     targetPath: string,
-  ): Array<{ localName: string }> {
-    const bindings: Array<{ localName: string }> = [];
+  ): Array<{ localName: string; binding: Node }> {
+    const bindings: Array<{ localName: string; binding: Node }> = [];
     for (const declaration of imports) {
       const clause = declaration.importClause;
       if (
@@ -101,86 +103,73 @@ export class ModuleImportDeclarator {
           isIdentifier(importedName) &&
           importedName.text === symbol
         ) {
-          bindings.push({ localName: specifier.name.text });
+          bindings.push({
+            localName: specifier.name.text,
+            binding: specifier.name,
+          });
         }
       }
     }
     return bindings;
   }
 
-  private getModuleBindings(source: SourceFile): Set<string> {
-    const bindings = new Set<string>();
-    for (const statement of source.statements) {
-      if (isImportDeclaration(statement)) {
-        const clause = statement.importClause;
-        if (!clause) continue;
-        if (clause.name) bindings.add(clause.name.text);
-        if (clause.namedBindings?.kind === SyntaxKind.NamespaceImport) {
-          bindings.add(clause.namedBindings.name.text);
-        } else if (clause.namedBindings) {
+  private getModuleBindings(source: SourceFile): Map<string, Node[]> {
+    const bindings = new Map<string, Node[]>();
+    const addIdentifier = (identifier: Node): void => {
+      if (!isIdentifier(identifier)) return;
+      const declarations = bindings.get(identifier.text) ?? [];
+      declarations.push(identifier);
+      bindings.set(identifier.text, declarations);
+    };
+    const visit = (node: Node): void => {
+      if (isImportDeclaration(node)) {
+        const clause = node.importClause;
+        if (clause?.name) addIdentifier(clause.name);
+        if (clause?.namedBindings?.kind === SyntaxKind.NamespaceImport) {
+          addIdentifier(clause.namedBindings.name);
+        } else if (clause?.namedBindings) {
           for (const specifier of clause.namedBindings.elements) {
-            bindings.add(specifier.name.text);
+            addIdentifier(specifier.name);
           }
         }
-        continue;
+        return;
       }
-      if (isImportEqualsDeclaration(statement)) {
-        bindings.add(statement.name.text);
-      }
-      if (
-        (isClassDeclaration(statement) ||
-          isFunctionDeclaration(statement) ||
-          isInterfaceDeclaration(statement) ||
-          isTypeAliasDeclaration(statement) ||
-          isEnumDeclaration(statement) ||
-          isModuleDeclaration(statement)) &&
-        statement.name &&
-        isIdentifier(statement.name)
-      ) {
-        bindings.add(statement.name.text);
-      }
-      if (isVariableStatement(statement)) {
-        for (const declaration of statement.declarationList.declarations) {
-          this.addBindingNames(declaration.name, bindings);
-        }
-      }
-    }
-    this.addTopLevelVarBindings(source, bindings);
-    return bindings;
-  }
-
-  private addTopLevelVarBindings(
-    source: SourceFile,
-    bindings: Set<string>,
-  ): void {
-    const visit = (node: Node): void => {
-      if (
-        node !== source &&
-        (isFunctionLike(node) ||
-          isClassStaticBlockDeclaration(node) ||
-          isModuleDeclaration(node))
-      ) {
+      if (isImportEqualsDeclaration(node)) {
+        addIdentifier(node.name);
         return;
       }
       if (
-        isVariableDeclarationList(node) &&
-        (node.flags & NodeFlags.BlockScoped) === 0
+        isClassDeclaration(node) ||
+        isClassExpression(node) ||
+        isFunctionDeclaration(node) ||
+        isFunctionExpression(node) ||
+        isInterfaceDeclaration(node) ||
+        isTypeAliasDeclaration(node) ||
+        isEnumDeclaration(node) ||
+        isModuleDeclaration(node) ||
+        isTypeParameterDeclaration(node)
       ) {
-        for (const declaration of node.declarations) {
-          this.addBindingNames(declaration.name, bindings);
+        if ('name' in node && node.name && isIdentifier(node.name)) {
+          addIdentifier(node.name);
         }
+      }
+      if (isVariableDeclaration(node) || isParameter(node)) {
+        this.addBindingNames(node.name, bindings);
       }
       node.forEachChild(visit);
     };
     visit(source);
+    return bindings;
   }
 
   private addBindingNames(
     name: import('typescript').BindingName,
-    bindings: Set<string>,
+    bindings: Map<string, Node[]>,
   ): void {
     if (isIdentifier(name)) {
-      bindings.add(name.text);
+      const declarations = bindings.get(name.text) ?? [];
+      declarations.push(name);
+      bindings.set(name.text, declarations);
       return;
     }
     for (const element of name.elements) {

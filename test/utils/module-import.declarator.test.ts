@@ -6,6 +6,104 @@ import {
   ModuleDeclarator,
 } from '../../src/utils/module.declarator.js';
 
+function compileAndCaptureProviders(content: string): {
+  generatedService: Function;
+  providers: unknown[];
+} {
+  const files = new Map([
+    ['/virtual/app.module.ts', content],
+    [
+      '/virtual/other.ts',
+      'export class Other {}\nexport class OtherService {}\n',
+    ],
+    ['/virtual/users/users.service.ts', 'export class UsersService {}\n'],
+    [
+      '/virtual/nest-common.d.ts',
+      "declare module '@nestjs/common' { export function Module(metadata: { providers: unknown[] }): ClassDecorator; }\n",
+    ],
+  ]);
+  const options: ts.CompilerOptions = {
+    experimentalDecorators: true,
+    module: ts.ModuleKind.CommonJS,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    noEmit: true,
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+    types: [],
+  };
+  const host = ts.createCompilerHost(options);
+  const originalFileExists = host.fileExists.bind(host);
+  const originalReadFile = host.readFile.bind(host);
+  const originalGetSourceFile = host.getSourceFile.bind(host);
+  host.fileExists = (fileName) =>
+    files.has(fileName) || originalFileExists(fileName);
+  host.readFile = (fileName) =>
+    files.get(fileName) ?? originalReadFile(fileName);
+  host.getSourceFile = (
+    fileName,
+    languageVersion,
+    onError,
+    shouldCreateNew,
+  ) => {
+    const text = files.get(fileName);
+    return text === undefined
+      ? originalGetSourceFile(
+          fileName,
+          languageVersion,
+          onError,
+          shouldCreateNew,
+        )
+      : ts.createSourceFile(fileName, text, languageVersion);
+  };
+  host.resolveModuleNames = (moduleNames) =>
+    moduleNames.map((moduleName) => {
+      const fileName =
+        moduleName === '@nestjs/common'
+          ? '/virtual/nest-common.d.ts'
+          : moduleName === './other'
+            ? '/virtual/other.ts'
+            : moduleName === './users/users.service'
+              ? '/virtual/users/users.service.ts'
+              : undefined;
+      return fileName
+        ? { resolvedFileName: fileName, extension: ts.Extension.Ts }
+        : undefined;
+    });
+  const program = ts.createProgram([...files.keys()], options, host);
+  expect(ts.getPreEmitDiagnostics(program)).toEqual([]);
+
+  const generatedService = class GeneratedUsersService {};
+  const other = class Other {};
+  const otherService = class OtherService {};
+  const emitted = ts.transpileModule(content, {
+    compilerOptions: {
+      experimentalDecorators: true,
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+    },
+  }).outputText;
+  let providers: unknown[] = [];
+  const requireModule = (specifier: string) => {
+    if (specifier === '@nestjs/common') {
+      return {
+        Module: (metadata: { providers: unknown[] }) => {
+          providers = metadata.providers;
+          return (target: unknown) => target;
+        },
+      };
+    }
+    if (specifier === './users/users.service') {
+      return { UsersService: generatedService };
+    }
+    if (specifier === './other') {
+      return { Other: other, OtherService: otherService };
+    }
+    throw new Error(`Unexpected module: ${specifier}`);
+  };
+  new Function('require', 'exports', emitted)(requireModule, {});
+  return { generatedService, providers };
+}
+
 describe('Module Import Declarator', () => {
   it('should add import to the buffered module content', () => {
     const content: string =
@@ -317,6 +415,152 @@ describe('Module Import Declarator', () => {
         "import { UsersService } from './users/users.service';",
       );
       expect(result).toContain('providers: [OtherService, UsersService]');
+    });
+
+    it('does not let a nested declaration shadow a newly generated alias', () => {
+      const content = new ModuleDeclarator().declare(
+        "import { Module } from '@nestjs/common';\n" +
+          "import { Other as UsersService } from './other';\n" +
+          'function setup() {\n' +
+          '  const UsersService_1 = UsersService;\n' +
+          '  @Module({ providers: [] })\n' +
+          '  class AppModule {}\n' +
+          '  return AppModule;\n' +
+          '}\n' +
+          'setup();\n',
+        options,
+      );
+
+      const { generatedService, providers } =
+        compileAndCaptureProviders(content);
+      expect(providers).toEqual([generatedService]);
+    });
+
+    it('does not reuse an imported alias shadowed at the target decorator', () => {
+      const content = new ModuleDeclarator().declare(
+        "import { Module } from '@nestjs/common';\n" +
+          "import { UsersService as Existing } from './users/users.service';\n" +
+          "import { OtherService } from './other';\n" +
+          'function setup() {\n' +
+          '  const Existing = OtherService;\n' +
+          '  @Module({ providers: [] })\n' +
+          '  class AppModule {}\n' +
+          '  return AppModule;\n' +
+          '}\n' +
+          'setup();\n',
+        options,
+      );
+
+      const { generatedService, providers } =
+        compileAndCaptureProviders(content);
+      expect(providers).toEqual([generatedService]);
+    });
+
+    it.each([
+      [
+        'a shadowed parameter',
+        'function setup(UsersService_1: typeof UsersService) {\n' +
+          '  @Module({ providers: [] }) class AppModule {}\n' +
+          '}\n' +
+          'setup(UsersService);\n',
+      ],
+      [
+        'a destructured parameter',
+        'function setup({ UsersService_1 }: { UsersService_1: typeof UsersService }) {\n' +
+          '  @Module({ providers: [] }) class AppModule {}\n' +
+          '}\n' +
+          'setup({ UsersService_1: UsersService });\n',
+      ],
+      [
+        'a nested block declaration',
+        'function setup() {\n' +
+          '  {\n' +
+          '    const UsersService_1 = UsersService;\n' +
+          '    @Module({ providers: [] }) class AppModule {}\n' +
+          '  }\n' +
+          '}\n' +
+          'setup();\n',
+      ],
+      [
+        'a nested function declaration',
+        'function setup() {\n' +
+          '  function register() {\n' +
+          '    const UsersService_1 = UsersService;\n' +
+          '    @Module({ providers: [] }) class AppModule {}\n' +
+          '  }\n' +
+          '  register();\n' +
+          '}\n' +
+          'setup();\n',
+      ],
+    ])('avoids alias shadowing by %s at the decorator', (_case, scope) => {
+      const content = new ModuleDeclarator().declare(
+        "import { Module } from '@nestjs/common';\n" +
+          "import { Other as UsersService } from './other';\n" +
+          scope,
+        options,
+      );
+
+      expect(content).toContain(
+        "import { UsersService as UsersService_2 } from './users/users.service';",
+      );
+      const { generatedService, providers } =
+        compileAndCaptureProviders(content);
+      expect(providers).toEqual([generatedService]);
+    });
+
+    it('uses an unshadowed matching alias when another alias is shadowed', () => {
+      const content = new ModuleDeclarator().declare(
+        "import { Module } from '@nestjs/common';\n" +
+          "import { UsersService as Unsafe } from './users/users.service';\n" +
+          "import { UsersService as Safe } from './users/users.service';\n" +
+          "import { OtherService } from './other';\n" +
+          'function setup() {\n' +
+          '  const Unsafe = OtherService;\n' +
+          '  @Module({ providers: [] }) class AppModule {}\n' +
+          '}\n' +
+          'setup();\n',
+        options,
+      );
+
+      expect(content).toContain('providers: [Safe]');
+      expect(content).not.toContain('providers: [Unsafe]');
+      const { generatedService, providers } =
+        compileAndCaptureProviders(content);
+      expect(providers).toEqual([generatedService]);
+    });
+
+    it('does not alias for unrelated nested declarations', () => {
+      const content = new ModuleDeclarator().declare(
+        "import { Module } from '@nestjs/common';\n" +
+          "import { OtherService } from './other';\n" +
+          'function setup() {\n' +
+          '  const Unrelated = OtherService;\n' +
+          '  @Module({ providers: [] }) class AppModule {}\n' +
+          '}\n' +
+          'setup();\n',
+        options,
+      );
+
+      expect(content).toContain(
+        "import { UsersService } from './users/users.service';",
+      );
+      expect(content).toContain('providers: [UsersService]');
+      const { generatedService, providers } =
+        compileAndCaptureProviders(content);
+      expect(providers).toEqual([generatedService]);
+    });
+
+    it('is idempotent when an existing imported alias is shadowed', () => {
+      const content =
+        "import { UsersService as Existing } from './users/users.service';\n" +
+        'function setup() {\n' +
+        '  const Existing = OtherService;\n' +
+        '  @Module({ providers: [] }) class AppModule {}\n' +
+        '}\n';
+      const declarator = new ModuleDeclarator();
+      const once = declarator.declare(content, options);
+
+      expect(declarator.declare(once, options)).toBe(once);
     });
 
     it('executes a conflicting module and registers the generated service class through its alias', () => {
