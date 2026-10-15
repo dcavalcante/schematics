@@ -379,13 +379,7 @@ describe('Metadata Manager', () => {
       ),
     );
     expect(new MetadataManager(content).insert('imports', 'BarModule')).toEqual(
-      'import { Module } from \'@nestjs/common\';\n' +
-      '\n' +
-      '@Module({\n' +
-      '  imports: [BarModule],\n' +
-      '  providers,\n' +
-      '})\n' +
-      'export class FooModule {}\n'
+      content.replace('  imports: [],', '  imports: [BarModule],'),
     );
   });
   it('should not duplicate a provider already inserted into shorthand metadata', () => {
