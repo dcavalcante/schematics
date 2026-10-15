@@ -73,10 +73,17 @@ export class ModuleImportDeclarator {
 
     const localSymbol = this.uniqueSymbol(symbol, new Set(bindings.keys()));
     const toInsert = this.buildLineToInsert(options, localSymbol);
-    const contentLines = content.split('\n');
-    const finalImportIndex = this.findImportsEndpoint(contentLines);
-    contentLines.splice(finalImportIndex + 1, 0, toInsert);
-    return { content: contentLines.join('\n'), symbol: localSymbol };
+    const lastImport = imports[imports.length - 1];
+    const insertionPoint =
+      lastImport?.end ?? source.statements[0]?.getStart(source) ?? source.end;
+    const importText = lastImport ? `\n${toInsert}` : `${toInsert}\n`;
+    return {
+      content:
+        content.slice(0, insertionPoint) +
+        importText +
+        content.slice(insertionPoint),
+      symbol: localSymbol,
+    };
   }
 
   private findRequestedImports(
@@ -184,23 +191,6 @@ export class ModuleImportDeclarator {
     let suffix = 1;
     while (bindings.has(`${symbol}_${suffix}`)) suffix++;
     return `${symbol}_${suffix}`;
-  }
-
-  /**
-   * Finds the endpoint of the existing import statements in the content.
-   *
-   * @param contentLines - The lines of the content.
-   * @returns The index of the last import statement.
-   */
-  private findImportsEndpoint(contentLines: string[]): number {
-    const reversedContent = Array.from(contentLines).reverse();
-    const reverseImports = reversedContent.filter((line) =>
-      line.match(/\} from ('|")/),
-    );
-    if (reverseImports.length <= 0) {
-      return 0;
-    }
-    return contentLines.indexOf(reverseImports[0]);
   }
 
   /**

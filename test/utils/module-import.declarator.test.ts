@@ -323,6 +323,33 @@ describe('Module Import Declarator', () => {
       expect(result).toContain('providers: [UsersService_2]');
     });
 
+    it('inserts a real import outside a multiline block comment', () => {
+      const content = new ModuleDeclarator().declare(
+        "import { Module } from '@nestjs/common';\n" +
+          '\n/*\n' +
+          "import { Unrelated } from './fake';\n" +
+          '*/\n\n' +
+          '@Module({ providers: [] })\n' +
+          'export class AppModule {}\n',
+        options,
+      );
+      const source = ts.createSourceFile(
+        'app.module.ts',
+        content,
+        ts.ScriptTarget.Latest,
+      );
+      const serviceImports = source.statements.filter(
+        (statement) =>
+          ts.isImportDeclaration(statement) &&
+          ts.isStringLiteral(statement.moduleSpecifier) &&
+          statement.moduleSpecifier.text === './users/users.service',
+      );
+      expect(serviceImports).toHaveLength(1);
+      const { generatedService, providers } =
+        compileAndCaptureProviders(content);
+      expect(providers).toEqual([generatedService]);
+    });
+
     it('does not treat a commented out import as a binding', () => {
       const content = moduleContent(
         "/* import { UsersService } from './users/users.service'; */\n",
