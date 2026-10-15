@@ -7,12 +7,14 @@ import {
   Identifier,
   Node,
   NodeArray,
+  NodeFlags,
   ObjectLiteralElement,
   ObjectLiteralExpression,
   PropertyAssignment,
   ShorthandPropertyAssignment,
   SourceFile,
   SyntaxKind,
+  VariableStatement,
 } from 'typescript';
 import type { ScriptTarget } from 'typescript';
 import { DeclarationOptions } from './module.declarator.js';
@@ -236,6 +238,34 @@ export class MetadataManager {
     if (matchingProperties[0].kind === SyntaxKind.ShorthandPropertyAssignment) {
       const property = matchingProperties[0] as ShorthandPropertyAssignment;
       const name = property.name.getText(source);
+      const declaration = source.statements
+        .filter(
+          (statement): statement is VariableStatement =>
+            statement.kind === SyntaxKind.VariableStatement,
+        )
+        .filter(
+          (statement) =>
+            (statement.declarationList.flags & NodeFlags.Const) !== 0,
+        )
+        .flatMap((statement) => statement.declarationList.declarations)
+        .find((item) => item.name.getText(source) === name);
+
+      // Only expand locally declared constant arrays whose elements are known.
+      if (declaration?.initializer?.kind !== SyntaxKind.ArrayLiteralExpression) {
+        return this.content;
+      }
+      const elements = (declaration.initializer as ArrayLiteralExpression)
+        .elements;
+      if (
+        elements.some(
+          (element) =>
+            element.kind === SyntaxKind.SpreadElement ||
+            element.getText(source) === symbol,
+        )
+      ) {
+        return this.content;
+      }
+
       const start = property.getStart(source);
       const end = property.getEnd();
       return (

@@ -397,6 +397,52 @@ describe('Metadata Manager', () => {
     );
   });
 
+  it('should expand a typed constant array in shorthand metadata', () => {
+    const content =
+      'const providers: Provider[] = [ExistingService];\n' +
+      '@Module({ providers })\n' +
+      'export class AppModule {}\n';
+    expect(new MetadataManager(content).insert('providers', 'FooService')).toBe(
+      content.replace('providers })', 'providers: [...providers, FooService] })'),
+    );
+  });
+
+  it('should preserve shorthand when the provider is already declared', () => {
+    const content =
+      'const providers = [ExistingService, FooService];\n' +
+      '@Module({ providers })\n' +
+      'export class AppModule {}\n';
+    expect(new MetadataManager(content).insert('providers', 'FooService')).toBe(
+      content,
+    );
+  });
+
+  it('should preserve shorthand when the referenced array contains a spread', () => {
+    const content =
+      'const providers = [...sharedProviders];\n' +
+      '@Module({ providers })\n' +
+      'export class AppModule {}\n';
+    expect(new MetadataManager(content).insert('providers', 'FooService')).toBe(
+      content,
+    );
+  });
+
+  it('should preserve shorthand for dynamic or imported provider lists', () => {
+    for (const declaration of [
+      'const providers = getProviders();\n',
+      'let providers = [ExistingService];\n',
+      "import { providers } from './providers';\n",
+    ]) {
+      const content =
+        declaration +
+        '@Module({ providers })\n' +
+        'export class AppModule {}\n';
+      expect(new MetadataManager(content).insert('providers', 'FooService')).toBe(
+        content,
+      );
+    }
+  });
+
   it('should return undefined if there is no metadata to update', () => {
     const metadata = 'imports';
     const symbol = 'FooModule';
