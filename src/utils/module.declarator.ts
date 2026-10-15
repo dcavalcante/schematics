@@ -1,4 +1,5 @@
 import { Path } from '@angular-devkit/core';
+import type { Tree } from '@angular-devkit/schematics';
 import { capitalize, classify } from '@angular-devkit/core/src/utils/strings';
 import { ModuleImportDeclarator } from './module-import.declarator.js';
 import { ModuleMetadataDeclarator } from './module-metadata.declarator.js';
@@ -12,6 +13,8 @@ export interface DeclarationOptions {
   module: Path;
   symbol?: string;
   isEsm?: boolean;
+  language?: string;
+  tree?: Tree;
   staticOptions?: {
     name: string;
     value: Record<string, any>;
@@ -39,9 +42,11 @@ export class ModuleDeclarator {
    */
   public declare(content: string, options: DeclarationOptions): string {
     options = this.computeSymbol(options);
-    content = this.imports.declare(content, options);
-    content = this.metadata.declare(content, options);
-    return content;
+    const imported = this.imports.declareWithSymbol(content, options);
+    return this.metadata.declare(imported.content, {
+      ...options,
+      symbol: imported.symbol,
+    });
   }
 
   /**

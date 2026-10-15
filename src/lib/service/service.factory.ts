@@ -106,6 +106,8 @@ function addDeclarationToModule(options: ServiceOptions): Rule {
       options.module,
       declarator.declare(content, {
         ...options,
+        tree,
+        language: options.language,
         isEsm: isEsmProject(tree),
       } as DeclarationOptions),
     );
